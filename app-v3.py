@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 import os
+from urllib.parse import quote
 from collections import Counter
 
 app = Flask(__name__)
@@ -217,17 +218,50 @@ def predict_from_history(history, current_loss_streak=0):
         }
     }
 
-# 3. Sync API Data & Verify Predictions
-def sync_and_evaluate():
+# 3. Cloud-Friendly Fetcher with 403 Bypass & Fallback Routes
+def fetch_api_json():
+    ts = int(time.time() * 1000)
+    target_url = f"{API_URL}?ts={ts}"
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*"
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+        "Origin": "https://draw.ar-lottery01.com",
+        "Referer": "https://draw.ar-lottery01.com/WinGo/WinGo_30S",
+        "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124"',
+        "Sec-Ch-Ua-Mobile": "?1",
+        "Sec-Ch-Ua-Platform": '"Android"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
     }
+
+    # Route 1: Direct Request + Backup Proxy Gateways if Cloud IP gets 403
+    encoded = quote(target_url, safe="")
+    urls_to_try = [
+        target_url,
+        f"https://api.allorigins.win/raw?url={encoded}",
+        f"https://api.codetabs.com/v1/proxy?quest={encoded}",
+        f"https://corsproxy.io/?{encoded}"
+    ]
+
+    last_err = None
+    for u in urls_to_try:
+        try:
+            resp = requests.get(u, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                return resp.json()
+            last_err = f"HTTP {resp.status_code} on {u[:35]}..."
+        except Exception as e:
+            last_err = str(e)
+
+    raise Exception(f"All routes failed. Last error: {last_err}")
+
+# 4. Sync API Data & Verify Predictions
+def sync_and_evaluate():
     try:
-        url = f"{API_URL}?ts={int(time.time() * 1000)}"
-        response = requests.get(url, headers=headers, timeout=8)
-        response.raise_for_status()
-        raw_json = response.json()
+        raw_json = fetch_api_json()
 
         items = []
         if isinstance(raw_json, dict):
@@ -352,7 +386,7 @@ def ensure_collector_started():
 # Start collector automatically when imported by Gunicorn / Cloud WSGI
 ensure_collector_started()
 
-# 4. Complete Database & Number Matrix Analytics
+# 5. Complete Database & Number Matrix Analytics
 def build_dashboard_payload():
     with db_lock:
         conn = sqlite3.connect(DB_FILE)
